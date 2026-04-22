@@ -1,0 +1,121 @@
+////////////////------------------------------------------------------------------------------------------////////////////////////////////////
+module full_adder_subtractor_1bit (
+    input logic clk,
+    input  logic A,       // Input bit A
+    input  logic B,       // Input bit B
+    input  logic cin,     // Carry in (for addition) or borrow in (for subtraction)
+    input  logic add_sub, // Control signal: 0 for Add, 1 for Subtract
+    output logic sum,     // Sum or difference result
+    output logic G,       // Generate signal
+    output logic P        // Propagate signal
+);
+
+    logic B_complement;   // B XOR-ed for subtraction
+
+    // XOR B with add_sub to perform subtraction when add_sub is 1
+    assign B_complement = B ^ add_sub;
+
+    // Generate and Propagate signals
+    assign G = A & B_complement;  // Generate G = A & B_complement
+    assign P = A ^ B_complement;  // Propagate P = A ^ B_complement
+    
+    // Sum calculation
+    assign sum = P ^ cin;         // Sum = P XOR carry-in
+
+endmodule
+////////////////------------------------------------------------------------------------------------------////////////////////////////////////
+
+
+////////////////------------------------------------------------------------------------------------------////////////////////////////////////
+module cla_4bit (
+    input  logic [3:0] A,        // 4-bit Input A
+    input  logic [3:0] B,        // 4-bit Input B
+    input  logic       cin,      // Carry-in (for LSB)
+    input  logic       add_sub,  // Control signal: 0 for Add, 1 for Subtract
+    output logic [3:0] sum,      // 4-bit Sum or Difference
+    output logic       carry_out_1 // Carry-out from the MSB
+);
+
+    logic [3:0] G, P;            // Generate and Propagate signals
+    logic [3:0] C;               // Carry signals
+
+    // Instantiate 1-bit full adder/subtractor units
+    full_adder_subtractor_1bit fa0 (.A(A[0]), .B(B[0]), .cin(cin), .add_sub(add_sub), .sum(sum[0]), .G(G[0]), .P(P[0]));
+    full_adder_subtractor_1bit fa1 (.A(A[1]), .B(B[1]), .cin(C[0]), .add_sub(add_sub), .sum(sum[1]), .G(G[1]), .P(P[1]));
+    full_adder_subtractor_1bit fa2 (.A(A[2]), .B(B[2]), .cin(C[1]), .add_sub(add_sub), .sum(sum[2]), .G(G[2]), .P(P[2]));
+    full_adder_subtractor_1bit fa3 (.A(A[3]), .B(B[3]), .cin(C[2]), .add_sub(add_sub), .sum(sum[3]), .G(G[3]), .P(P[3]));
+
+    // Carry-lookahead logic
+    assign C[0] = G[0] | (P[0] & cin);        // Carry-in to second bit
+    assign C[1] = G[1] | (P[1] & C[0]);       // Carry-in to third bit
+    assign C[2] = G[2] | (P[2] & C[1]);       // Carry-in to fourth bit
+    assign carry_out_1 = G[3] | (P[3] & C[2]);  // Carry-out from the MSB
+
+endmodule
+////////////////------------------------------------------------------------------------------------------////////////////////////////////////
+
+
+////////////////------------------------------------------------------------------------------------------////////////////////////////////////
+module regHSaddSub (
+    input  logic [7:0] Sw,       // 8-bit Input A -or- B
+    input  logic       SwitchAB, // Switch between A or B inputs
+    input  logic       add_sub,  // Control signal: 0 for Add, 1 for Subtract
+    input  logic       clk,      // Clock signal
+    input  logic       rst_n,    // Asynchronous active-low reset
+    output logic [7:0] result,   // 8-bit result of the operation
+    output logic       carry_out,// Carry out flag
+    output logic       overflow, // Overflow flag
+    output logic       zero,     // Zero flag
+    output logic       negative  // Negative flag
+);
+
+    logic [7:0] A, B;            // 8-bit Input A and B
+    logic carry_in_lsb, carry_out_lsb, carry_out_msb;  // Carry signals between the CLA blocks
+    logic [7:0] sum;                                   // Sum of 8 bits
+
+    // Carry-in for the LSB CLA block is add_sub for subtraction, 0 for addition
+    assign carry_in_lsb = add_sub;
+
+    // Instantiate two 4-bit CLA blocks for the lower and upper 4 bits
+    cla_4bit cla_lower (
+        .A(A[3:0]), .B(B[3:0]), .cin(carry_in_lsb), .add_sub(add_sub),
+        .sum(sum[3:0]), .carry_out_1(carry_out_lsb)
+    );
+    cla_4bit cla_upper (
+        .A(A[7:4]), .B(B[7:4]), .cin(carry_out_lsb), .add_sub(add_sub),
+        .sum(sum[7:4]), .carry_out_1(carry_out_msb)
+    );
+
+    // Switch between A or B inputs based on SwitchAB signal
+    always_ff @(posedge clk ) begin
+        if (!rst_n) begin
+            A <= 8'b0;
+            B <= 8'b0;
+        end else begin
+            if (!SwitchAB) begin
+                A <= Sw;  // Use Sw for A
+            end else begin
+                B <= Sw;  // Use Sw for B
+            end
+        end
+    end
+
+    // Register the result and condition codes on the clock edge
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            result    <= 8'b0;
+            carry_out <= 1'b0;
+            overflow  <= 1'b0;
+            zero      <= 1'b0;
+            negative  <= 1'b0;
+        end else begin
+            result    <= sum;
+            carry_out <= carry_out_msb;               // Carry-out from the most significant bit
+            overflow  <= carry_out_lsb ^ carry_out_msb;  // Overflow detection based on carry into and out of MSB
+            zero      <= (sum == 8'b0);               // Zero flag: all result bits are 0
+            negative  <= sum[7];                      // Negative flag: MSB of the result
+        end
+    end
+
+endmodule
+////////////////------------------------------------------------------------------------------------------////////////////////////////////////
